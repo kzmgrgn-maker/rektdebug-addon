@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "rektdebug-addon",
+  "version": "${version}",
+  "name": "RektDebug Addon",
+  "description": "A Meteor Client addon with movement detection and alert modules.",
+  "authors": ["rekt"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "com.rektdebug.RektDebugAddon"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "meteor-client": "*"
+  }
+}
