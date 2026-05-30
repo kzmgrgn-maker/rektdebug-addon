@@ -8,14 +8,14 @@ import net.minecraft.block.BlockState;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class RektMovement extends Module {
 
-    private static final int MAX_BLOCKS = 2000;
+    private static final int MAX_BLOCKS = 1500;
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgDisplay  = settings.createGroup("Display");
@@ -23,9 +23,9 @@ public class RektMovement extends Module {
     public final Setting<Integer> radius = sgGeneral.add(new IntSetting.Builder()
         .name("radius")
         .description("Tarama yarıçapı (blok).")
-        .defaultValue(8)
+        .defaultValue(6)
         .min(2)
-        .sliderMax(16)
+        .sliderMax(12)
         .build()
     );
 
@@ -61,8 +61,10 @@ public class RektMovement extends Module {
         .build()
     );
 
-    private final Map<BlockPos, BlockState> prevBlocks = new LinkedHashMap<>();
-    public final List<DetectedMovement> detections = new ArrayList<>();
+    // CopyOnWriteArrayList prevents ConcurrentModificationException
+    public final List<DetectedMovement> detections = new CopyOnWriteArrayList<>();
+
+    private final Map<BlockPos, BlockState> prevBlocks = new HashMap<>();
     private int tickCounter = 0;
 
     public RektMovement() {
@@ -87,14 +89,10 @@ public class RektMovement extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
-
         tickCounter++;
 
-        // Süresi dolmuş tespitleri temizle
-        Iterator<DetectedMovement> it = detections.iterator();
-        while (it.hasNext()) {
-            if (it.next().isExpired()) it.remove();
-        }
+        // Remove expired detections safely (CopyOnWriteArrayList allows this)
+        detections.removeIf(DetectedMovement::isExpired);
 
         if (tickCounter % scanInterval.get() == 0) {
             scanForChanges();
@@ -130,8 +128,10 @@ public class RektMovement extends Module {
     private void scanForChanges() {
         if (mc.world == null || mc.player == null) return;
 
+        List<DetectedMovement> newDetections = new ArrayList<>();
+
         for (Map.Entry<BlockPos, BlockState> entry : prevBlocks.entrySet()) {
-            BlockPos  pos      = entry.getKey();
+            BlockPos   pos      = entry.getKey();
             BlockState oldState = entry.getValue();
             BlockState newState = mc.world.getBlockState(pos);
 
@@ -140,7 +140,7 @@ public class RektMovement extends Module {
                 String desc = oldState.getBlock().getName().getString()
                     + " -> " + newState.getBlock().getName().getString();
 
-                detections.add(new DetectedMovement(
+                newDetections.add(new DetectedMovement(
                     pos, type, desc, System.currentTimeMillis(), displayDuration.get()
                 ));
 
@@ -153,5 +153,7 @@ public class RektMovement extends Module {
                 }
             }
         }
+
+        detections.addAll(newDetections);
     }
 }
