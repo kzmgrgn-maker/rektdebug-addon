@@ -3,37 +3,45 @@ package com.rektdebug.modules;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.BlockState;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.World;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 public class RektMovement extends Module {
 
+    private static final int MAX_BLOCKS = 2000;
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgDisplay = settings.createGroup("Display");
+    private final SettingGroup sgDisplay  = settings.createGroup("Display");
 
     public final Setting<Integer> radius = sgGeneral.add(new IntSetting.Builder()
         .name("radius")
-        .description("Block radius to scan for movement.")
-        .defaultValue(16)
-        .min(4)
-        .sliderMax(32)
+        .description("Tarama yarıçapı (blok).")
+        .defaultValue(8)
+        .min(2)
+        .sliderMax(16)
+        .build()
+    );
+
+    public final Setting<Integer> scanInterval = sgGeneral.add(new IntSetting.Builder()
+        .name("scan-interval")
+        .description("Kaç tickte bir taransın.")
+        .defaultValue(10)
+        .min(5)
+        .sliderMax(40)
         .build()
     );
 
     public final Setting<Integer> displayDuration = sgGeneral.add(new IntSetting.Builder()
         .name("display-duration")
-        .description("How long (ms) to show a detected movement.")
-        .defaultValue(3000)
+        .description("Tespiti kaç ms göster.")
+        .defaultValue(4000)
         .min(500)
         .sliderMax(10000)
         .build()
@@ -41,30 +49,32 @@ public class RektMovement extends Module {
 
     public final Setting<Boolean> showCoords = sgDisplay.add(new BoolSetting.Builder()
         .name("show-coords")
-        .description("Show coordinates of detected movement.")
+        .description("Koordinatları göster.")
         .defaultValue(true)
         .build()
     );
 
     public final Setting<Boolean> chatLog = sgDisplay.add(new BoolSetting.Builder()
         .name("chat-log")
-        .description("Print detections to chat.")
+        .description("Tespitleri chate yaz.")
         .defaultValue(false)
         .build()
     );
 
-    private final Map<BlockPos, BlockState> prevBlocks = new HashMap<>();
+    private final Map<BlockPos, BlockState> prevBlocks = new LinkedHashMap<>();
     public final List<DetectedMovement> detections = new ArrayList<>();
     private int tickCounter = 0;
 
     public RektMovement() {
-        super(RektDebugCategory.CATEGORY, "rekt-movement", "Detects block state changes and entity movements in your radius.");
+        super(RektDebugCategory.CATEGORY, "rekt-movement",
+              "Yakın blok değişikliklerini tespit eder.");
     }
 
     @Override
     public void onActivate() {
         prevBlocks.clear();
         detections.clear();
+        tickCounter = 0;
         snapshotBlocks();
     }
 
@@ -80,12 +90,13 @@ public class RektMovement extends Module {
 
         tickCounter++;
 
+        // Süresi dolmuş tespitleri temizle
         Iterator<DetectedMovement> it = detections.iterator();
         while (it.hasNext()) {
             if (it.next().isExpired()) it.remove();
         }
 
-        if (tickCounter % 2 == 0) {
+        if (tickCounter % scanInterval.get() == 0) {
             scanForChanges();
             snapshotBlocks();
         }
@@ -93,16 +104,24 @@ public class RektMovement extends Module {
 
     private void snapshotBlocks() {
         if (mc.world == null || mc.player == null) return;
-        World world = mc.world;
-        Vec3d center = mc.player.getPos();
-        int r = radius.get();
-        prevBlocks.clear();
 
-        for (int x = (int) center.x - r; x <= (int) center.x + r; x++) {
-            for (int y = (int) center.y - r; y <= (int) center.y + r; y++) {
-                for (int z = (int) center.z - r; z <= (int) center.z + r; z++) {
+        int px = (int) mc.player.getX();
+        int py = (int) mc.player.getY();
+        int pz = (int) mc.player.getZ();
+        int r  = radius.get();
+
+        prevBlocks.clear();
+        int count = 0;
+
+        outer:
+        for (int x = px - r; x <= px + r; x++) {
+            for (int y = Math.max(mc.world.getBottomY(), py - r);
+                     y <= Math.min(mc.world.getTopY() - 1, py + r); y++) {
+                for (int z = pz - r; z <= pz + r; z++) {
+                    if (count >= MAX_BLOCKS) break outer;
                     BlockPos pos = new BlockPos(x, y, z);
-                    prevBlocks.put(pos, world.getBlockState(pos));
+                    prevBlocks.put(pos, mc.world.getBlockState(pos));
+                    count++;
                 }
             }
         }
@@ -110,26 +129,26 @@ public class RektMovement extends Module {
 
     private void scanForChanges() {
         if (mc.world == null || mc.player == null) return;
-        World world = mc.world;
 
         for (Map.Entry<BlockPos, BlockState> entry : prevBlocks.entrySet()) {
-            BlockPos pos = entry.getKey();
+            BlockPos  pos      = entry.getKey();
             BlockState oldState = entry.getValue();
-            BlockState newState = world.getBlockState(pos);
+            BlockState newState = mc.world.getBlockState(pos);
 
             if (!newState.equals(oldState)) {
                 String type = "Block Change";
                 String desc = oldState.getBlock().getName().getString()
                     + " -> " + newState.getBlock().getName().getString();
 
-                DetectedMovement det = new DetectedMovement(pos, type, desc,
-                    System.currentTimeMillis(), displayDuration.get());
-                detections.add(det);
+                detections.add(new DetectedMovement(
+                    pos, type, desc, System.currentTimeMillis(), displayDuration.get()
+                ));
 
-                if (chatLog.get()) {
+                if (chatLog.get() && mc.player != null) {
                     String msg = showCoords.get()
-                        ? String.format("[RektMovement] %s at (%d, %d, %d): %s", type, pos.getX(), pos.getY(), pos.getZ(), desc)
-                        : String.format("[RektMovement] %s: %s", type, desc);
+                        ? String.format("[RektMovement] %s (%d,%d,%d): %s",
+                            type, pos.getX(), pos.getY(), pos.getZ(), desc)
+                        : "[RektMovement] " + type + ": " + desc;
                     mc.player.sendMessage(net.minecraft.text.Text.literal(msg), false);
                 }
             }
